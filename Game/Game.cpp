@@ -126,7 +126,7 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 
 int g_stage = 1; /// 현재 스테이지 번호
 int g_life = 5; /// 남은 목숨 수
-int g_time = 10; /// 제한 시간 (초 단위라고 가정)
+int g_time = 15; /// 제한 시간 (초 단위라고 가정)
 bool g_hard = false; /// 난이도 (false = 쉬움, true = 어려움)
 bool g_started = false; /// 게임이 시작되었는지 여부 (false면 난이도 선택 단계)
 
@@ -138,8 +138,16 @@ int g_len = 5; /// 이번 스테이지의 패턴 길이
 bool g_showPattern = true; /// 패턴을 화면에 보여줄지 여부
 int g_showTimer = 3; /// 패턴을 몇 초 동안 보여줄지 (어려움 모드에서 씀)
 
-#define TIMER_GAME 1 /// 제한시간 감소용 타이머 ID
-#define TIMER_HIDE 2 /// “패턴 숨기기”용 타이머 ID
+bool g_hintActive = false;      /// 힌트가 켜져 있는지
+int  g_hintTimer = 0;           /// 힌트를 몇 초 동안 보여줄지 (2초)
+int g_hintCount = 3;			/// 사용할 수 있는 힌트 총 3개
+
+#define TIMER_GAME 1			/// 제한시간 감소용 타이머 ID
+#define TIMER_HIDE 2			/// “패턴 숨기기”용 타이머 ID
+#define TIMER_HINT 3            /// 힌트 타이머 ID
+
+
+
 
 HWND g_hwnd;
 
@@ -191,6 +199,65 @@ void DrawPattern(HDC hdc) /// 화면에 화살표 그리는 함수
 	}
 }
 
+void StartGame() /// 게임 시작용 함수 만들기 (난이도 결정 후 호출)
+{
+	g_stage = 1;
+	g_life = 5;
+	g_time = 15;
+	g_len = 5;
+	g_index = 0;
+
+	g_showPattern = true;
+	g_showTimer = 3;
+	g_hintCount = 3;     /// 사용할 수 있는 힌트 총 3개
+
+	MakePattern();  /// 첫 패턴 생성
+
+	/// 타이머 시작 (제한시간)
+	SetTimer(g_hwnd, TIMER_GAME, 1000, NULL);
+
+	/// 어려움 모드면 '패턴 숨기기' 타이머도 같이 시작
+	if (g_hard) {
+		SetTimer(g_hwnd, TIMER_HIDE, 1000, NULL);
+	}
+
+
+	g_started = true;   /// 이제부터는 게임 진행 상태
+}
+
+void ResetGame(HWND hWnd)
+{
+	g_started = false;
+	g_hard = false;
+
+	g_index = 0;
+	g_life = 5;
+	g_time = 15;
+
+	// 화면 지우기
+	InvalidateRect(hWnd, NULL, TRUE);
+}
+
+
+void GameOver(HWND hWnd, const wchar_t* reason)
+{
+	// 모든 타이머 중단
+	KillTimer(hWnd, TIMER_GAME);
+	KillTimer(hWnd, TIMER_HIDE);
+
+	wchar_t msg[200];
+	wsprintf(msg, L"%s\n다시 해볼텨 ?", reason);
+
+	int res = MessageBox(hWnd, msg, L"GAME OVER", MB_YESNO | MB_ICONQUESTION);
+
+
+	if (res == IDYES) {
+		ResetGame(hWnd);   // ← 재시작 처리
+	}
+	else {
+		DestroyWindow(hWnd);   // ← 프로그램 종료
+	}
+}
 
 void KeyCheck(int key) /// 방향키 입력을 정답과 비교하는 함수
 {
@@ -207,8 +274,8 @@ void KeyCheck(int key) /// 방향키 입력을 정답과 비교하는 함수
 	if (input != g_pattern[g_index]) {
 		g_life--;		/// 목숨 하나 감소
 		if (g_life <= 0) {
-			MessageBox(NULL, L"게임 끝나쓰어", L"디엔도", MB_OK);
-			exit(0);
+			GameOver(g_hwnd, L"목숨을 모두 잃었소...!");
+			return;
 		}
 		return;
 	}
@@ -220,7 +287,7 @@ void KeyCheck(int key) /// 방향키 입력을 정답과 비교하는 함수
 	if (g_index == g_len) { /// 사용자의 입력 길이와 스테이지의 패턴 길이 비교식, 이번 스테이지 패턴을 전부 성공적으로 입력.
 		g_stage++; /// 스테이지 번호 증가
 		g_len++; /// 다음 스테이지는 한 개 더 길게
-		g_time = 10; /// 제한 시간 초기화
+		g_time = 15; /// 제한 시간 초기화
 		g_showPattern = true; /// 패턴 다시 보여주기
 		g_showTimer = 3; /// 패턴 보여주는 시간 초기화
 		MakePattern(); /// 새로운 패턴 다시 생성
@@ -234,30 +301,26 @@ void KeyCheck(int key) /// 방향키 입력을 정답과 비교하는 함수
 }
 
 
-void StartGame() /// 게임 시작용 함수 만들기 (난이도 결정 후 호출)
+void UseHint()
 {
-	g_stage = 1;
-	g_life = 5;
-	g_time = 10;
-	g_len = 5;
-	g_index = 0;
+	if (!g_hard) return;           /// 힌트는 어려움 모드에서만
+	if (!g_started) return;        /// 게임 시작 전이면 무시
+	if (g_showPattern) return;     /// 이미 패턴을 보여주는 중이면 힌트 불필요
+	if (g_hintCount <= 0) return; /// 힌트 다 썼으면 종료
 
-	g_showPattern = true;
-	g_showTimer = 3;
-
-	MakePattern();  /// 첫 패턴 생성
-
-	/// 타이머 시작 (제한시간)
-	SetTimer(g_hwnd, TIMER_GAME, 1000, NULL);
-
-	/// 어려움 모드면 '패턴 숨기기' 타이머도 같이 시작
-	if (g_hard) {
-		SetTimer(g_hwnd, TIMER_HIDE, 1000, NULL);
-	}
+	g_hintCount--;               /// 힌트 1개 소모
 
 
-	g_started = true;   /// 이제부터는 게임 진행 상태
+	g_hintActive = true;
+	g_showPattern = true;          /// 패턴을 다시 보여줌
+	g_hintTimer = 2;               /// 2초 동안 표시
+
+	/// 힌트 타이머 시작
+	SetTimer(g_hwnd, TIMER_HINT, 1000, NULL);
+
+	InvalidateRect(g_hwnd, NULL, TRUE);
 }
+
 
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -282,9 +345,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		if (wParam == TIMER_GAME) {
 			g_time--;
 			if (g_time <= 0) {
-				KillTimer(hWnd, TIMER_GAME); 
-				MessageBox(hWnd, L"시간초과! GAME OVER", L"END", MB_OK);
-				exit(0);
+				GameOver(hWnd, L"시간 초과!");
 			}
 		}
 
@@ -293,8 +354,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			g_showTimer--; 
 			if (g_showTimer <= 0) { 
 				g_showPattern = false; /// 패턴 숨기기
-				KillTimer(hWnd, TIMER_HIDE); 
+				KillTimer(hWnd, TIMER_HIDE);
+			}
+		}
 
+		if (wParam == TIMER_HINT && g_hintActive && g_hard)
+		{
+			g_hintTimer--;
+
+			if (g_hintTimer <= 0)
+			{
+				g_hintActive = false;
+				g_showPattern = false; /// 다시 숨기기
+				KillTimer(hWnd, TIMER_HINT);
 			}
 		}
 
@@ -307,7 +379,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		/// 아직 게임 시작 전이면 → 난이도 선택 단계
 		if (!g_started)
 		{
-			if (wParam == 'E' || wParam == 'e')
+			if (wParam == 'E' || wParam == 'e') 
 			{
 				g_hard = false;   /// 쉬움
 				StartGame();
@@ -318,7 +390,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				StartGame();
 			}
 
+
 			InvalidateRect(hWnd, NULL, TRUE);
+			break;
+		}
+
+		if (wParam == 'T' || wParam == 't')
+		{
+			UseHint();
 			break;
 		}
 
@@ -360,19 +439,21 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			TextOut(hdc, 100, 80, L"------------------------------------------------------------------------------------------------------------------------------------------------------", 
 				lstrlenW(L"------------------------------------------------------------------------------------------------------------------------------------------------------"));
 			TextOut(hdc, 100, 110, L"★ 스테이지별로 화면에 출력된 방향키를 순서대로 누르면 스테이지 클리어", lstrlenW(L"★ 스테이지별로 화면에 출력된 방향키를 순서대로 누르면 스테이지 클리어"));
-			TextOut(hdc, 100, 140, L"★ 한 스테이지 당 제한시간 10초, 제한시간 내 스테이지를 클리어하여 최다 스테이지를 기록하시지요", 
-				lstrlenW(L"★ 한 스테이지 당 제한시간 10초, 제한시간 내 스테이지를 클리어하여 최다 스테이지를 기록하시지요"));
-			TextOut(hdc, 100, 170, L"★ 스테이지 넘어갈 때 마다 방향키 수가 하나씩 증가합니다.", lstrlenW(L"★ 스테이지 넘어갈 때 마다 방향키 수가 하나씩 증가합니다."));
+			TextOut(hdc, 100, 140, L"★ 한 스테이지 당 제한시간 15초, 제한시간 내 스테이지를 클리어하여 최다 스테이지를 기록하시지요", 
+				lstrlenW(L"★ 한 스테이지 당 제한시간 15초, 제한시간 내 스테이지를 클리어하여 최다 스테이지를 기록하시지요"));
+			TextOut(hdc, 100, 170, L"★ 스테이지 넘어갈 때 마다 눌러야 할 방향키 수가 하나씩 증가합니다.", lstrlenW(L"★ 스테이지 넘어갈 때 마다 눌러야 할 방향키 수가 하나씩 증가합니다."));
 			TextOut(hdc, 100, 200, L"★ 한번 틀릴 때마다 생명이 줄어듭니다.", lstrlenW(L"★ 한번 틀릴 때마다 생명이 줄어듭니다."));
 			TextOut(hdc, 100, 230, L"★ 제한시간이 넘어가면 게임오버되며 게임종료 됩니다.", lstrlenW(L"★ 제한시간이 넘어가면 게임오버되며 게임종료 됩니다."));
-			TextOut(hdc, 180, 270, L"그럼 Good Luck ♣", lstrlenW(L"그럼 Good Luck ♣"));
+			TextOut(hdc, 100, 260, L"★ 어려움 모드는 3초 이후 화면이 사라집니다 잘 기억해봐여", lstrlenW(L"★ 어려움 모드는 3초 이후 화면이 사라집니다 잘 기억해봐여"));
+			TextOut(hdc, 100, 290, L"★ 어려워 할 당신을 위해 힌트도 만들었는데 T 누르면 2초간 보여주니까 홧팅", lstrlenW(L"★ 어려워 할 당신을 위해 힌트도 만들었는데 T 누르면 2초간 보여주니까 홧팅"));
+			TextOut(hdc, 180, 330, L"그럼 Good Luck ♣", lstrlenW(L"그럼 Good Luck ♣"));
 			
-			TextOut(hdc, 100, 300, L"------------------------------------------------------------------------------------------------------------------------------------------------------",
+			TextOut(hdc, 100, 360, L"------------------------------------------------------------------------------------------------------------------------------------------------------",
 				lstrlenW(L"------------------------------------------------------------------------------------------------------------------------------------------------------"));
 
-			TextOut(hdc, 100, 330, L"난이도 선택", lstrlenW(L"난이도 선택"));
-			TextOut(hdc, 100, 360, L"[E] 쉬움  /  [H] 어려움", lstrlenW(L"[E] 쉬움  /  [H] 어려움"));
-			TextOut(hdc, 100, 390, L"난이도를 고른 후 방향키로 화살표를 입력하세요.", lstrlenW(L"난이도를 고른 후 방향키로 화살표를 입력하세요."));
+			TextOut(hdc, 100, 390, L"--- 난이도 선택 ---", lstrlenW(L"--- 난이도 선택 ---"));
+			TextOut(hdc, 100, 420, L"[E] 쉬움  /  [H] 어려움", lstrlenW(L"[E] 쉬움  /  [H] 어려움"));
+			TextOut(hdc, 100, 450, L"난이도를 고른 후 방향키로 화살표를 입력하세요.", lstrlenW(L"난이도를 고른 후 방향키로 화살표를 입력하세요."));
 		}
 		else
 		{
@@ -380,13 +461,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			wchar_t text[100];
 
 			wsprintf(text, L"STAGE : %d", g_stage);
-			TextOut(hdc, 50, 20, text, lstrlen(text));
+			TextOut(hdc, 100, 80, text, lstrlen(text));
 
 			wsprintf(text, L"LIFE : %d", g_life);
-			TextOut(hdc, 50, 50, text, lstrlen(text));
+			TextOut(hdc, 100, 110, text, lstrlen(text));
 
 			wsprintf(text, L"TIME : %d", g_time);
-			TextOut(hdc, 50, 80, text, lstrlen(text));
+			TextOut(hdc, 100, 140, text, lstrlen(text));
+
+			if (g_hard) {
+				wsprintf(text, L"HINT : %d", g_hintCount);
+				TextOut(hdc, 100, 170, text, lstrlen(text));
+			}
+			
 
 			/// 패턴 출력
 			DrawPattern(hdc);
